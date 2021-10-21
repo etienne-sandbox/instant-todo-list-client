@@ -1,10 +1,10 @@
-import React from "react";
+import { useEffect, useState } from "react";
 import { TodoList } from "./TodoList";
 
 export const App = () => {
-  const [apiStatus, setApiStatus] = React.useState(null);
+  const [apiStatus, setApiStatus] = useState(null);
 
-  React.useEffect(() => {
+  useEffect(() => {
     fetch("http://localhost:3001")
       .then((res) => {
         setApiStatus(true);

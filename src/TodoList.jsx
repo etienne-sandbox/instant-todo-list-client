@@ -1,191 +1,213 @@
-import React from "react";
+import { useState, useCallback, Fragment } from "react";
 import Ky from "ky";
+import { useMutation, useQuery } from "react-query";
+import { queryClient } from "./queryClient";
+import { nanoid } from "nanoid";
 
 export function TodoList() {
-  const [todos, setTodos] = React.useState(null);
-  const [todosUpdate, setTodoUpdate] = React.useState(0);
-  const [newTodoName, setNewTodoName] = React.useState("");
-  const [pending, setPending] = React.useState(false);
-  const [editingTodo, setEditingTodo] = React.useState(null);
-  const [editingTodoName, setEditingTodoName] = React.useState("");
-  const [pendingToggle, setPendingToggle] = React.useState({});
+  const [todosUpdate, setTodoUpdate] = useState(0);
+  const [newTodoName, setNewTodoName] = useState("");
+  const [editingTodo, setEditingTodo] = useState(null);
+  const [editingTodoName, setEditingTodoName] = useState("");
+  const [pendingToggle, setPendingToggle] = useState({});
 
-  const todosResolved =
-    todos === null
-      ? null
-      : todos.map((todo) => {
-          if (pendingToggle[todo.id] !== undefined) {
-            return {
-              ...todo,
-              done: pendingToggle[todo.id],
-            };
-          }
-          return todo;
-        });
+  const todosRes = useQuery("todos", () =>
+    Ky("http://localhost:3001/todos").json()
+  );
 
-  React.useEffect(() => {
-    let canceled = false;
-    Ky("http://localhost:3001/todos")
-      .json()
-      .then((todos) => {
-        if (canceled) {
-          return;
-        }
-        setPendingToggle({});
-        setTodos(todos);
-      });
-    return () => {
-      canceled = true;
-    };
-  }, [todosUpdate]);
+  const addTodoMut = useMutation(
+    (name) => {
+      return Ky.post("http://localhost:3001/todo", { json: { name } });
+    },
+    {
+      onMutate: async (name) => {
+        await queryClient.cancelQueries("todos");
+        const previousTodos = queryClient.getQueryData("todos");
+        queryClient.setQueryData("todos", (old) => [
+          ...old,
+          { id: nanoid(10), name, done: false, creating: true },
+        ]);
+        return { previousTodos };
+      },
+      onError: (_err, _newTodo, context) => {
+        queryClient.setQueryData("todos", context.previousTodos);
+      },
+      onSuccess: () => {
+        setNewTodoName("");
+      },
+      onSettled: () => {
+        queryClient.invalidateQueries("todos");
+      },
+    }
+  );
 
-  const addTodo = React.useCallback((name) => {
+  const toggleTodoMut = useMutation(
+    ({ id, done }) => {
+      return Ky.put(`http://localhost:3001/todo/${id}`, { json: { done } });
+    },
+    {
+      onMutate: async ({ id, done }) => {
+        await queryClient.cancelQueries("todos");
+        const previousTodos = queryClient.getQueryData("todos");
+        queryClient.setQueryData("todos", (old) =>
+          old.map((todo) =>
+            todo.id === id ? { ...todo, done, updating: true } : todo
+          )
+        );
+        return { previousTodos };
+      },
+      onError: (_err, _newTodo, context) => {
+        queryClient.setQueryData("todos", context.previousTodos);
+      },
+      onSettled: () => {
+        queryClient.invalidateQueries("todos");
+      },
+    }
+  );
+
+  const removeTodoMut = useMutation(
+    (id) => Ky.delete(`http://localhost:3001/todo/${id}`),
+    {
+      onMutate: async (id) => {
+        await queryClient.cancelQueries("todos");
+        const previousTodos = queryClient.getQueryData("todos");
+        queryClient.setQueryData("todos", (old) =>
+          old.map((todo) =>
+            todo.id === id ? { ...todo, deleted: true } : todo
+          )
+        );
+        return { previousTodos };
+      },
+      onError: (_err, _newTodo, context) => {
+        queryClient.setQueryData("todos", context.previousTodos);
+      },
+      onSettled: () => {
+        queryClient.invalidateQueries("todos");
+      },
+    }
+  );
+
+  const renameTodoMut = useMutation(
+    ({ id, name }) => {
+      return Ky.put(`http://localhost:3001/todo/${id}`, { json: { name } });
+    },
+    {
+      onMutate: async ({ id, name }) => {
+        await queryClient.cancelQueries("todos");
+        const previousTodos = queryClient.getQueryData("todos");
+        queryClient.setQueryData("todos", (old) =>
+          old.map((todo) =>
+            todo.id === id ? { ...todo, name, updating: true } : todo
+          )
+        );
+        return { previousTodos };
+      },
+      onSuccess: () => {
+        setEditingTodo(null);
+      },
+      onError: (_err, _newTodo, context) => {
+        queryClient.setQueryData("todos", context.previousTodos);
+      },
+      onSettled: () => {
+        queryClient.invalidateQueries("todos");
+      },
+    }
+  );
+
+  const addTodo = useCallback((name) => {
     if (name.length === 0) {
       return;
     }
-    setPending(true);
-    Ky.post("http://localhost:3001/todo", {
-      json: {
-        name,
-      },
-    })
-      .then((todos) => {
-        setPending(false);
-        setTodoUpdate((v) => v + 1);
-        setNewTodoName("");
-      })
-      .catch(() => {
-        setPending(false);
-      });
+    addTodoMut.mutate(name);
   }, []);
 
-  const toggleTodo = React.useCallback((id, done) => {
-    setPending(true);
-    setPendingToggle((prev) => ({ ...prev, [id]: done }));
-    Ky.put(`http://localhost:3001/todo/${id}`, {
-      json: {
-        done,
-      },
-    })
-      .then(() => {
-        setPending(false);
-        setTodoUpdate((v) => v + 1);
-      })
-      .catch(() => {
-        setPendingToggle((prev) => {
-          const copy = { ...prev };
-          delete copy[id];
-          return copy;
-        });
-        setPending(false);
-      });
-  }, []);
+  const pending =
+    addTodoMut.isLoading || toggleTodoMut.isLoading || renameTodoMut.isLoading;
 
-  const renameTodo = React.useCallback((id, name) => {
-    setPending(true);
-    Ky.put(`http://localhost:3001/todo/${id}`, {
-      json: {
-        name,
-      },
-    })
-      .then(() => {
-        setPending(false);
-        setEditingTodo(null);
-        setTodoUpdate((v) => v + 1);
-      })
-      .catch(() => {
-        setPending(false);
-      });
-  }, []);
-
-  const removeTodo = React.useCallback((id) => {
-    setPending(true);
-    Ky.delete(`http://localhost:3001/todo/${id}`)
-      .then(() => {
-        setPending(false);
-        setTodoUpdate((v) => v + 1);
-      })
-      .catch(() => {
-        setPending(false);
-      });
-  }, []);
-
-  if (todosResolved === null) {
+  if (todosRes.isLoading) {
     return <p>Loading...</p>;
   }
 
   return (
     <div className="center">
-      {todosResolved.map((todo) => {
-        if (todo.id === editingTodo) {
-          return (
-            <div key={todo.id} className="todo">
-              <div
-                className={"checkbox" + (todo.done ? " checked" : "")}
-                onClick={(e) => {
-                  toggleTodo(todo.id, !todo.done);
-                }}
-              >
-                {todo.done ? <span>✓</span> : null}
-              </div>
-              <input
-                value={editingTodoName}
-                onChange={(e) => setEditingTodoName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (pending) {
-                    return;
-                  }
-                  if (e.key === "Enter") {
-                    renameTodo(todo.id, editingTodoName);
-                  }
-                }}
-              />
-              <button
-                className="rename"
-                disabled={pending}
-                onClick={() => {
-                  if (pending) {
-                    return;
-                  }
-                  renameTodo(todo.id, editingTodoName);
-                }}
-              >
-                ✓
-              </button>
-            </div>
-          );
-        }
+      <h1>Todos {pending || todosRes.isFetching ? "..." : ""}</h1>
+      {todosRes.data.map((todo) => {
         return (
           <div key={todo.id} className="todo">
             <div
-              className={"checkbox" + (todo.done ? " checked" : "")}
+              className={
+                "checkbox" +
+                (todo.done ? " checked" : "") +
+                (todo.updating ? " updating" : "") +
+                (todo.creating ? " creating" : "")
+              }
               onClick={(e) => {
-                toggleTodo(todo.id, !todo.done);
+                toggleTodoMut.mutate({ id: todo.id, done: !todo.done });
               }}
             >
               {todo.done ? <span>✓</span> : null}
             </div>
-            <div
-              className="name"
-              onClick={() => {
-                setEditingTodoName(todo.name);
-                setEditingTodo(todo.id);
-              }}
-            >
-              {todo.name}
-            </div>
-            <button
-              className="delete"
-              disabled={pending}
-              onClick={() => {
-                if (pending) {
-                  return;
-                }
-                removeTodo(todo.id);
-              }}
-            >
-              ✖
-            </button>
+            {todo.id === editingTodo ? (
+              <Fragment>
+                <input
+                  value={editingTodoName}
+                  onChange={(e) => setEditingTodoName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (pending) {
+                      return;
+                    }
+                    if (e.key === "Enter") {
+                      renameTodoMut.mutate({
+                        id: todo.id,
+                        name: editingTodoName,
+                      });
+                    }
+                  }}
+                />
+                <button
+                  className="rename"
+                  disabled={pending}
+                  onClick={() => {
+                    if (pending) {
+                      return;
+                    }
+                    renameTodoMut.mutate({
+                      id: todo.id,
+                      name: editingTodoName,
+                    });
+                  }}
+                >
+                  {renameTodoMut.isLoading ? "..." : "✓"}
+                </button>
+              </Fragment>
+            ) : (
+              <Fragment>
+                <div
+                  className="name"
+                  onClick={() => {
+                    setEditingTodoName(todo.name);
+                    setEditingTodo(todo.id);
+                  }}
+                  style={{
+                    textDecoration: todo.deleted ? "line-through" : "none",
+                  }}
+                >
+                  {todo.name}
+                </div>
+                <button
+                  className="delete"
+                  disabled={pending}
+                  onClick={() => {
+                    if (pending) {
+                      return;
+                    }
+                    removeTodoMut.mutate(todo.id);
+                  }}
+                >
+                  ✖
+                </button>
+              </Fragment>
+            )}
           </div>
         );
       })}
