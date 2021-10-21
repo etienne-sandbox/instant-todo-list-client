@@ -5,11 +5,9 @@ import { queryClient } from "./queryClient";
 import { nanoid } from "nanoid";
 
 export function TodoList() {
-  const [todosUpdate, setTodoUpdate] = useState(0);
   const [newTodoName, setNewTodoName] = useState("");
   const [editingTodo, setEditingTodo] = useState(null);
   const [editingTodoName, setEditingTodoName] = useState("");
-  const [pendingToggle, setPendingToggle] = useState({});
 
   const todosRes = useQuery("todos", () =>
     Ky("http://localhost:3001/todos").json()
